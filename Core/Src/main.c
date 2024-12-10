@@ -169,17 +169,100 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  
+
   // esse while consome: ~6.6uS, ~20uS c/ callbacks UART, e ~50uS em IRQs ticks
   // para enviar um buffer 5 bytes na UART ~400 uS
   while (1)
   {
     /* USER CODE END WHILE */
-
-    /* USER CODE BEGIN 3 */
-
 	// VERIFICACAO DOS BOTÕES
 
 	// TRATAMENTO DOS BOTÕES
+	// Definindo os estados
+	typedef enum {
+	    ESTADO_INICIAL,
+	    ESTADO_NORMAL,
+	    ESTADO_ALTERNANCIA_A1,
+	    ESTADO_ALTERNANCIA_A2,
+	    ESTADO_ACIONAR_BUZZER
+	} estado_t;
+	
+	estado_t estadoAtual = ESTADO_INICIAL;
+	
+	unsigned long tempoAnterior = 0;
+	unsigned long intervalo = 4000; // Intervalo para alternância de A1 (4s)
+	unsigned long intervaloA2 = 2000; // Intervalo para alternância de A2 (2s)
+	
+	bool exibirAmigo = false; // Controla se exibe os valores do amigo
+	bool exibirCronometro = true; // Controla se exibe o cronômetro ou ADC
+	
+	int contadorAlternanciaA2 = 0; // Controla a alternância de 4 valores no A2
+	switch(estadoAtual) {
+        case ESTADO_INICIAL:
+            // Display todo ligado e cronômetro disparado
+            iniciarCronometro();
+            estadoAtual = ESTADO_NORMAL;
+            break;
+		
+	case ESTADO_NORMAL:
+            break;
+
+        case ESTADO_ALTERNANCIA_A1:
+            if (millis() - tempoAnterior >= intervalo) {
+                // Alternar entre cronômetro e ADC
+                exibirCronometro = !exibirCronometro;
+                tempoAnterior = millis();
+            }
+            
+            // Exibir o valor alternado
+            if (exibirCronometro) {
+                exibirCronometroLocal();
+            } else {
+                exibirADC();
+            }
+            break;
+
+        case ESTADO_ALTERNANCIA_A2:
+            if (millis() - tempoAnterior >= intervaloA2) {
+                // Alterar para o próximo valor a ser exibido no ciclo A2
+                contadorAlternanciaA2 = (contadorAlternanciaA2 + 1) % 4; // Ciclar entre 0, 1, 2, 3
+                tempoAnterior = millis();
+            }
+
+            // Exibir os valores de acordo com o contador
+            switch (contadorAlternanciaA2) {
+                case 0:
+                    exibirCronometroLocal();
+                    break;
+                case 1:
+                    exibirADC();
+                    break;
+                case 2:
+                    exibirCronometroAmigo();
+                    break;
+                case 3:
+                    exibirADCAmigo();
+                    break;
+            }
+            break;
+
+        case ESTADO_ACIONAR_BUZZER:
+            if (digitalRead(A3) == HIGH) {
+                acionarBuzzer();
+            }
+
+            // Voltar para o estado normal
+            estadoAtual = ESTADO_NORMAL;
+            break;
+
+        default:
+            estadoAtual = ESTADO_INICIAL;
+            break;
+    }
+}
+
+	  
 	// - A1 (PA1): MOSTRA CRONOMETRO E ADC A CADA 2v/4s
 	// - A2 (PA2): REQUISITA DADOS DA PLACA DO AMIGO
 	//			   COMEÇA A MOSTRAR OS NOSSOS VALORES E OS VALORES DO AMIGO 4v/2s
@@ -188,7 +271,8 @@ int main(void)
 
 
 	// MAQUINA EXIBICACAO DISPLAY
-
+	  
+	  
 	// MAQUINA PISCA LEDS
 
 	// MAQUINA TOCA BUZZER
@@ -201,6 +285,7 @@ int main(void)
 		case DB_NORMAL:                    // se bt sem acionar muito tempo - normal
 		  if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == 0) {
 			tIN_A1 = tNow;                 // salva tempo do fall
+			estadoAtual = ESTADO_ALTERNANCIA_A1;
 	// aqui entra o que acontece quando A1 é ativado
 			sttBTA1 = DB_FALL;             // prox estado 'FALL'
 		  }
@@ -228,6 +313,7 @@ int main(void)
 		 case DB_NORMAL:                    // se bt sem acionar muito tempo - normal
 		   if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == 0) {
 			 tIN_A2 = tNow;                 // salva tempo do fall
+			 estadoAtual = ESTADO_ALTERNANCIA_A2;
 	// aqui entra o que acontece quando A2 é ativado
 			 sttBTA2 = DB_FALL;             // prox estado 'FALL'
 		   }
@@ -255,6 +341,7 @@ int main(void)
 		 case DB_NORMAL:                    // se bt sem acionar muito tempo - normal
 		   if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == 0) {
 			 tIN_A3 = tNow;                 // salva tempo do fall
+			 estadoAtual = ESTADO_ACIONAR_BUZZER;
 	// aqui entra o que acontece quando A3 é ativado
 			 sttBTA3 = DB_FALL;             // prox estado 'FALL'
 		   }
