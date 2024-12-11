@@ -15,41 +15,39 @@
   *
   ******************************************************************************
   */
-/* USER CODE END Header */
-/* Includes ------------------------------------------------------------------*/
-#include "main.h"
 
-/* Private includes ----------------------------------------------------------*/
-/* USER CODE BEGIN Includes */
+//------------------------------------------
+// INCLUDES
+//------------------------------------------
+#include "main.h"
 #include "funcoes_SPI_display.h"
 #include "stm32f1xx_hal_conf.h"
+#include <stdint.h>
+#include <stdbool.h>
 
 
-/* USER CODE END Includes */
+//------------------------------------------
+// DEFINES
+//------------------------------------------
+#define DT_ADC 				199           // dt = 199 ms, sample rate 5 samples/seg
+#define DT_VARRE_DISP		6      // dt = ~7ms p/ varrer display (142 vz/s)
+#define DT_REFRESH			89        // DT = ~90ms p/ nova requisição de dados
+#define DT_DISP_MODO1 		3999   // modo 1 muda display a cada 4000 ms
+#define DT_DISP_MODO2 		1999   // modo 2 muda display a cada 2000 ms
+#define DT_LEDS 			199          // intervalo tempo para piscar leds
+#define DT_CRONO 			99          // dt = 99 ms, entra no 100 e ajusta crono
+#define DT_DEB_LOW			200       // tempo debouncing fall
+#define DT_DEB_HIGH 		100      // tempo debouncing rising
+#define NDGDISP				4            // tem NDGDISP displays no painel
 
-/* Private typedef -----------------------------------------------------------*/
-/* USER CODE BEGIN PTD */
+#define MD_CRONO 			0           // cronômetro =0 incrementa, =1 decrementa
 
-/* USER CODE END PTD */
+#define MS_INTERVALO_ALTER_A1	4000
+#define MS_INTERVALO_ALTER_A2	2000
 
-/* Private define ------------------------------------------------------------*/
-/* USER CODE BEGIN PD */
-#define DT_ADC 199           // dt = 199 ms, sample rate 5 samples/seg
-#define DT_VARRE_DISP 6      // dt = ~7ms p/ varrer display (142 vz/s)
-#define DT_REFRESH 89        // DT = ~90ms p/ nova requisição de dados
-#define DT_DISP_MODO1 3999   // modo 1 muda display a cada 4000 ms
-#define DT_DISP_MODO2 1999   // modo 2 muda display a cada 2000 ms
-#define DT_LEDS 199          // intervalo tempo para piscar leds
-#define DT_CRONO 99          // dt = 99 ms, entra no 100 e ajusta crono
-#define DT_DEB_LOW 200       // tempo debouncing fall
-#define DT_DEB_HIGH 100      // tempo debouncing rising
-#define NDGDISP 4            // tem NDGDISP displays no painel
+#define QTDE_TOCA_BUZZER	 		4
+#define MS_INTERVALO_TOCA_BUZZER	200
 
-#define MD_CRONO 0           // cronômetro =0 incrementa, =1 decrementa
-/* USER CODE END PD */
-
-/* Private macro -------------------------------------------------------------*/
-/* USER CODE BEGIN PM */
 
 /*  Algumas STRINGS de MENSAGENS desse projeto (Prof. J Ranhel):
     "rqcrn" requisita o envio do valor do CRONOMETRO do outro kit para o seu
@@ -60,219 +58,346 @@
     A mensagem é montada de BufOUT[0] até MSD BufOUT[3], c/ 5 caracteres.
     Para receber um valor é necessário requisitá-lo.
     Interv entre reqs(DT_REFRESH) deve ser <100ms p/ captar déc seg do crono*/
+
 #define REQCRN "rqcrn"       // define a string para pedir dado crono ext
 #define REQADC "rqadc"       // define a string para pedir dado ADC ext
-#define REQBZZ "rqbzz"       // define a string para solicitar servico
+#define REQBZZ "rqbzz"       // define a string para solicitar buzzer
+
 /*  macro = função que copia uma STRING(n chars) p/ o BufOUT[](n items) */
 #define STR_BUFF(str) do { \
     const char *src = str; \
     strncpy((char *)(BufOUT), src, sizeBuffs); \
 } while (0)
 
-/* USER CODE END PM */
 
-/* Private variables ---------------------------------------------------------*/
+//------------------------------------------
+// TYPEDEFS
+//------------------------------------------
+
+typedef enum
+{
+	DB_NORMAL,
+	DB_FALL,
+	DB_LOW,
+	DB_RISING
+
+} enum_estado_botoes;
+
+// Estados gerais
+typedef enum {
+	ESTADO_INICIAL,
+	ESTADO_NORMAL,
+	ESTADO_ALTERNANCIA_A1,
+	ESTADO_ALTERNANCIA_A2,
+	ESTADO_ACIONAR_BUZZER
+
+} estado_t;
+
+
+//------------------------------------------
+// LOCAL VARIABLES
+//------------------------------------------
+
+// Handles gerais
 ADC_HandleTypeDef hadc1;
 UART_HandleTypeDef huart1;
 
-/* USER CODE BEGIN PV */
 // buffers para entrada e saida de dados via USART
 uint8_t BufOUT[5];                     // def buffer OUT
 uint8_t BufIN[5];                      // def buffer IN
+
 int8_t DspHex[] = {16,16,16,16};       // vetor val display (se=16 display off)
 size_t sizeBuffs = sizeof(BufOUT);     // tamanho dos buffers - usa geral
+
 // os vetores seguintes tem idx[0] = digito menos significativo no display
 int8_t Crono[] = {0,0,0,0};            // vetor com vals dec do cronometro
 int8_t ValAdc[] = {0,0,0,0};           // vetor com vals decimais do ADC
-int8_t ExCrono[] = {0,0,0,0};          // vetor externo vals dec do crono
-int8_t ExValAdc[] = {0,0,0,0};         // vetor externo vals dec do ADC
-/* USER CODE END PV */
 
-/* Private function prototypes -----------------------------------------------*/
+int8_t ExCrono[] = {4,3,2,1};          // vetor externo vals dec do crono
+int8_t ExValAdc[] = {1,2,3,4};         // vetor externo vals dec do ADC
+
+int32_t qualMSG = 0;                   // var que controla qual MSG enviar
+int32_t modo = 0;                      // 'modo' do display (o que está mostrando)
+
+estado_t estadoAtual = ESTADO_INICIAL;
+
+const int8_t array_teste_display[] = {8,8,8,8};
+
+uint32_t tempoAnterior = 0;
+
+bool exibirCronometro = true; // Controla se exibe o cronômetro ou ADC
+
+int32_t contadorAlternanciaA2 = 0; // Controla a alternância de 4 valores no A2
+
+
+//------------------------------------------
+// LOCAL FUNCTIONS PROTOTYPES
+//------------------------------------------
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_NVIC_Init(void);
-/* USER CODE BEGIN PFP */
 
-/* USER CODE END PFP */
 
-/* Private user code ---------------------------------------------------------*/
-/* USER CODE BEGIN 0 */
-int qualMSG = 0,                       // var que controla qual MSG enviar
-    modo = 0 ;                         // 'modo' do display (o que está mostrando)
-/* USER CODE END 0 */
-
-/**
-  * @brief  The application entry point.
-  * @retval int
-  */
+//------------------------------------------
+// MAIN
+//------------------------------------------
 int main(void)
 {
-
-  /* USER CODE BEGIN 1 */
-  // definir os estados da FSM que controla 'debouncing' dos botões
-  static enum {DB_NORMAL, DB_FALL, DB_LOW, DB_RISING}
-  sttBTA1 = DB_NORMAL,                 // var estado FSM debouncing A1
-  sttBTA2 = DB_NORMAL,                 // var estado FSM debouncing A2
-  sttBTA3 = DB_NORMAL;                 // var estado FSM debouncing A3
-  uint32_t tNow = 0,                   // tempo que representa agora
-         tIN_A1 = 0,                   // salva tempo debouncing A1
-         tIN_A2 = 0,                   // salva tempo debouncing A2
-         tIN_A3 = 0,                   // salva tempo debouncing A3
-      tIN_varre = 0;                   // salva tempo última varredura
-  int flgPending = 0;                  // flag se tem uma msg pendente p/ envio
-  uint8_t ptoDec = 0;  // qual PTO ligar? (ex:0xA=>1010 => 1000=MSD + 0010=DG2)
-  /* USER CODE END 1 */
-
-  /* MCU Configuration--------------------------------------------------------*/
+	enum_estado_botoes sttBTA1 = DB_NORMAL;                 // var estado FSM debouncing A1
+	enum_estado_botoes sttBTA2 = DB_NORMAL;                 // var estado FSM debouncing A2
+	enum_estado_botoes sttBTA3 = DB_NORMAL;                 // var estado FSM debouncing A3
+	uint32_t tNow = 0;                   // tempo que representa agora
+	uint32_t tIN_A1 = 0;                   // salva tempo debouncing A1
+	uint32_t tIN_A2 = 0;                   // salva tempo debouncing A2
+	uint32_t tIN_A3 = 0;                   // salva tempo debouncing A3
+	uint32_t tIN_varre = 0;                   // salva tempo última varredura
+	uint32_t flgPending = 0;                  // flag se tem uma msg pendente p/ envio
 
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
   HAL_Init();
 
-  /* USER CODE BEGIN Init */
-
-  /* USER CODE END Init */
-
   /* Configure the system clock */
   SystemClock_Config();
 
-  /* USER CODE BEGIN SysInit */
-
-  /* USER CODE END SysInit */
-
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  //MX_ADC1_Init();
+  MX_ADC1_Init();
   MX_USART1_UART_Init();
 
   /* Initialize interrupts */
   MX_NVIC_Init();
 
-  /* USER CODE BEGIN 2 */
+  // começa SPI emulada com pinos = 'high'
+  reset_pinos_emula_SPI ();
 
-  reset_pinos_emula_SPI ();            // começa SPI emulada com pinos = 'high'
   // para a UART começar a receber os dados pelo RX
-  HAL_UART_Receive_IT(&huart1, BufIN, sizeBuffs);// reativa RECEPÇÃO por interrupção
+  HAL_UART_Receive_IT(&huart1, BufIN, sizeBuffs);
 
-  // COMECAR O DISPLAY TODO LIGADO
-  for(int i=0; i<4; i++)
-  {
-	  mostrar_no_display("8888", 0x0F);
-  }
-
-  // COMECAR O CRONOMETRO CRESCENTE
-  // LIGA O ADC PINO PA0 5S/s
-
-  /* USER CODE END 2 */
-
-  /* Infinite loop */
-  /* USER CODE BEGIN WHILE */
   // esse while consome: ~6.6uS, ~20uS c/ callbacks UART, e ~50uS em IRQs ticks
   // para enviar um buffer 5 bytes na UART ~400 uS
   while (1)
   {
-    /* USER CODE END WHILE */
+	switch(estadoAtual)
+	{
+        case ESTADO_INICIAL:
+        break;
 
-    /* USER CODE BEGIN 3 */
+        case ESTADO_ALTERNANCIA_A1:
+            if (HAL_GetTick() - tempoAnterior >= MS_INTERVALO_ALTER_A1)
+            {
+                // Alternar entre cronômetro e ADC
+                exibirCronometro = !exibirCronometro;
+                tempoAnterior = HAL_GetTick();
+            }
+        break;
 
-	// VERIFICACAO DOS BOTÕES
+        case ESTADO_ALTERNANCIA_A2:
+            if (HAL_GetTick() - tempoAnterior >= MS_INTERVALO_ALTER_A2)
+            {
+            	tempoAnterior = HAL_GetTick();
 
-	// TRATAMENTO DOS BOTÕES
+                // Alterar para o próximo valor a ser exibido no ciclo A2
+                contadorAlternanciaA2++;
+
+                if(contadorAlternanciaA2 > 3)
+                {
+                	contadorAlternanciaA2 = 0;
+                }
+            }
+        break;
+
+        case ESTADO_ACIONAR_BUZZER:
+//            if (digitalRead(A3) == HIGH) {
+//                acionarBuzzer();
+//            }
+
+            // Voltar para o estado normal
+            estadoAtual = ESTADO_NORMAL;
+        break;
+
+        default:
+            estadoAtual = ESTADO_INICIAL;
+        break;
+    }
+
+
+	// MAQUINA EXIBICACAO DISPLAY
+      if ((tNow-tIN_varre) > DT_VARRE_DISP)
+      {
+    	  tIN_varre = tNow;
+
+    	 switch(estadoAtual)
+    	 {
+    	 	 case ESTADO_INICIAL:
+    	 		 // Mostra "8888"
+    	 		for (int i=0; i<NDGDISP; i++) DspHex[i] = array_teste_display[i];
+
+    	 		mostrar_no_display(DspHex, 0x0F);
+    	     break;
+
+    	 	 case ESTADO_ALTERNANCIA_A1:
+    	 		if(exibirCronometro)
+    	 		{
+    	 			// Mostra nosso crono
+					for (int i=0; i<NDGDISP; i++) DspHex[i] = Crono[i];
+
+					mostrar_no_display(DspHex, 0x0A);
+    	 		}
+    	 		else
+    	 		{
+    	 			// Mostra ADC
+					for (int i=0; i<NDGDISP; i++) DspHex[i] = ValAdc[i];
+
+					mostrar_no_display(DspHex, 0x08);
+    	 		}
+			 break;
+
+    	 	 case ESTADO_ALTERNANCIA_A2:
+    	 		 switch(contadorAlternanciaA2)
+    	 		 {
+    	 		 	 case 0:
+    	 		 		// Mostra nosso crono
+						for (int i=0; i<NDGDISP; i++) DspHex[i] = Crono[i];
+
+						mostrar_no_display(DspHex, 0x0A);
+    	 			 break;
+
+    	 		 	 case 1:
+    	 		 		// Mostra ADC
+						for (int i=0; i<NDGDISP; i++) DspHex[i] = ValAdc[i];
+
+						mostrar_no_display(DspHex, 0x08);
+    	 		 	 break;
+
+    	 		 	 case 2:
+    	 		 		// Mostra crono do amigo
+						for (int i=0; i<NDGDISP; i++) DspHex[i] = ExCrono[i];
+
+						mostrar_no_display(DspHex, 0x0A);
+    	 		 	 break;
+
+    	 		 	 case 3:
+    	 		 		// Mostra ADC do amigo
+						for (int i=0; i<NDGDISP; i++) DspHex[i] = ExValAdc[i];
+
+						mostrar_no_display(DspHex, 0x08);
+    	 		 	 break;
+    	 		 }
+    	 	 break;
+
+    	 	 default:
+    	     break;
+    	 }
+      }
+
+
 	// - A1 (PA1): MOSTRA CRONOMETRO E ADC A CADA 2v/4s
 	// - A2 (PA2): REQUISITA DADOS DA PLACA DO AMIGO
 	//			   COMEÇA A MOSTRAR OS NOSSOS VALORES E OS VALORES DO AMIGO 4v/2s
 	//			   SE PRESSIONAR A1 VOLTA A MOSTRAR SO OS NOSSOS
 	// - A3 (PA3): SOLICITAR ACIONAMENTO DO BUZZER DA PLACA DO AMIGO
 
-
-	// MAQUINA EXIBICACAO DISPLAY
-
 	// MAQUINA PISCA LEDS
 
 	// MAQUINA TOCA BUZZER
 
-    tNow = HAL_GetTick();          // obter o tempo atual dessa iteracao
+    tNow = HAL_GetTick();
 
     // TRANSFORMAR ISSO TUDO PRA FUNÇÕES
-		// tarefa #1: polling PA1 e fazer debouncing fall e rise
+    // Primeiro botão
 		switch(sttBTA1) {
-		case DB_NORMAL:                    // se bt sem acionar muito tempo - normal
-		  if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == 0) {
-			tIN_A1 = tNow;                 // salva tempo do fall
-	// aqui entra o que acontece quando A1 é ativado
-			sttBTA1 = DB_FALL;             // prox estado 'FALL'
+		case DB_NORMAL:
+		  if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == 0)
+		  {
+			tIN_A1 = tNow;
+			estadoAtual = ESTADO_ALTERNANCIA_A1;
+
+			sttBTA1 = DB_FALL;
 		  }
 		  break;
 		case DB_FALL:
-		  if ((tNow-tIN_A1)>DT_DEB_LOW) {  // tempo do debouncing L?
-			sttBTA1 = DB_LOW;              // prox estado 'LOW'
+		  if ((tNow-tIN_A1)>DT_DEB_LOW)
+		  {
+			sttBTA1 = DB_LOW;
 		  }
 		  break;
 		case DB_LOW:
-		  if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == 1) {
-			tIN_A1 = tNow;                 // salva tempo da subida
-			sttBTA1 = DB_RISING;           // prox estado 'DB_RISING'
+		  if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == 1)
+		  {
+			tIN_A1 = tNow;
+			sttBTA1 = DB_RISING;
 		  }
 		  break;
 		case DB_RISING:
-		  if ((tNow-tIN_A1)>DT_DEB_HIGH) { // tempo debouncing H?
-			sttBTA1 = DB_NORMAL;           // prox estado 'DB_NORMAL'
+		  if ((tNow-tIN_A1)>DT_DEB_HIGH)
+		  {
+			sttBTA1 = DB_NORMAL;
 		  }
 		  break;
 		}
 
-		// tarefa #2: polling PA2, debouncing fall e rise
+	// Primeiro botão
 		switch(sttBTA2) {
-		 case DB_NORMAL:                    // se bt sem acionar muito tempo - normal
-		   if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == 0) {
-			 tIN_A2 = tNow;                 // salva tempo do fall
-	// aqui entra o que acontece quando A2 é ativado
-			 sttBTA2 = DB_FALL;             // prox estado 'FALL'
+		 case DB_NORMAL:
+		   if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == 0)
+		   {
+			 tIN_A2 = tNow;
+			 estadoAtual = ESTADO_ALTERNANCIA_A2;
+
+			 sttBTA2 = DB_FALL;
 		   }
 		   break;
 		 case DB_FALL:
-		   if ((tNow-tIN_A2)>DT_DEB_LOW) { // tempo do debouncing L?
-			 sttBTA2 = DB_LOW;             // prox estado 'LOW'
+		   if ((tNow-tIN_A2)>DT_DEB_LOW)
+		   {
+			 sttBTA2 = DB_LOW;
 		   }
 		   break;
 		 case DB_LOW:
-		   if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == 1) {
-			 tIN_A2 = tNow;                 // salva tempo da subida
-			 sttBTA2 = DB_RISING;           // prox estado 'DB_RISING'
+		   if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == 1)
+		   {
+			 tIN_A2 = tNow;
+			 sttBTA2 = DB_RISING;
 		   }
 		   break;
 		 case DB_RISING:
-		   if ((tNow-tIN_A2)>DT_DEB_HIGH) { // tempo debouncing H?
-			 sttBTA2 = DB_NORMAL;           // prox estado 'DB_NORMAL'
+		   if ((tNow-tIN_A2)>DT_DEB_HIGH)
+		   {
+			 sttBTA2 = DB_NORMAL;
 		   }
 		   break;
 		 }
 
-		// tarefa #3: polling PA3, debouncing fall e rise
+	// Terceiro botão
 		switch(sttBTA3) {
-		 case DB_NORMAL:                    // se bt sem acionar muito tempo - normal
-		   if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == 0) {
-			 tIN_A3 = tNow;                 // salva tempo do fall
-	// aqui entra o que acontece quando A3 é ativado
-			 sttBTA3 = DB_FALL;             // prox estado 'FALL'
+		 case DB_NORMAL:
+		   if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == 0)
+		   {
+			 tIN_A3 = tNow;
+			 estadoAtual = ESTADO_ACIONAR_BUZZER;
+
+			 sttBTA3 = DB_FALL;
 		   }
 		   break;
 		 case DB_FALL:
-		   if ((tNow-tIN_A3)>DT_DEB_LOW) { // tempo do debouncing L?
-			 sttBTA3 = DB_LOW;             // prox estado 'LOW'
+		   if ((tNow-tIN_A3)>DT_DEB_LOW)
+		   {
+			 sttBTA3 = DB_LOW;
 		   }
 		   break;
 		 case DB_LOW:
-		   if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == 1) {
-			 tIN_A3 = tNow;                 // salva tempo da subida
-			 sttBTA3 = DB_RISING;           // prox estado 'DB_RISING'
+		   if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == 1)
+		   {
+			 tIN_A3 = tNow;
+			 sttBTA3 = DB_RISING;
 		   }
 		   break;
 		 case DB_RISING:
-		   if ((tNow-tIN_A3)>DT_DEB_HIGH) { // tempo debouncing H?
-			 sttBTA3 = DB_NORMAL;           // prox estado 'DB_NORMAL'
+		   if ((tNow-tIN_A3)>DT_DEB_HIGH)
+		   {
+			 sttBTA3 = DB_NORMAL;
 		   }
 		   break;
 		 }
@@ -289,31 +414,24 @@ int main(void)
     //   BufOUT[4] = 'c';              // ASCII caractere 'c'
 
     // tarefa obrigatória #2: tem MSG pra enviar? enviar via UART
-    if (qualMSG != 0 || flgPending != 0) {
-      // se UART nao estiver com uma transissao em andamento:
-      if (HAL_UART_GetState(&huart1) != HAL_UART_STATE_BUSY_TX) {
-        HAL_UART_Transmit_IT(&huart1, BufOUT, sizeBuffs); // transmite a MSG
-        flgPending = 0;                // deslg flag pendencia
-        qualMSG = 0;                   // volta qualMSG p/ zero
-      } else {
-        flgPending = 1;                // liga flag pendencia transmissao
+    if (qualMSG != 0 || flgPending != 0)
+    {
+      // se UART nao estiver com uma transissao em andamento
+      if (HAL_UART_GetState(&huart1) != HAL_UART_STATE_BUSY_TX)
+      {
+    	  // transmite a MSG
+    	  HAL_UART_Transmit_IT(&huart1, BufOUT, sizeBuffs);
+
+    	  flgPending = 0;
+		  qualMSG = 0;
+      }
+      else
+      {
+
+    	  flgPending = 1;
       }
     }
-
-    // tarefa obrigatória #3: fazer a varredura nos displays
-    if ((tNow-tIN_varre) > DT_VARRE_DISP) { // tempo de mudar display?
-      tIN_varre = tNow;                // registra tempo última varredura
-// transferir Crono[],ValAdc[],ExCrono[] ou ExValAdc[] p/ vetor DspHex[]
-// exemplo para crono:
-      for (int i=0; i<NDGDISP; i++) DspHex[i] = Crono[i]; // DspHex = Crono
-
-// ajustar ponto decimal
-
-// chama fn varredura passando o ponteiro de DspHex (tam fixo)
-      mostrar_no_display(DspHex, ptoDec); // chama fn mostrar no display
-    }
-  }  // -- fim do loop infinito while(1)
-  /* USER CODE END 3 */
+  }
 }
 
 /**
@@ -371,6 +489,7 @@ static void MX_NVIC_Init(void)
   /* ADC1_2_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(ADC1_2_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(ADC1_2_IRQn);
+
   /* USART1_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(USART1_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(USART1_IRQn);
@@ -384,15 +503,7 @@ static void MX_NVIC_Init(void)
 static void MX_ADC1_Init(void)
 {
 
-  /* USER CODE BEGIN ADC1_Init 0 */
-
-  /* USER CODE END ADC1_Init 0 */
-
   ADC_ChannelConfTypeDef sConfig = {0};
-
-  /* USER CODE BEGIN ADC1_Init 1 */
-
-  /* USER CODE END ADC1_Init 1 */
 
   /** Common config
   */
@@ -417,10 +528,6 @@ static void MX_ADC1_Init(void)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN ADC1_Init 2 */
-
-  /* USER CODE END ADC1_Init 2 */
-
 }
 
 /**
@@ -430,14 +537,6 @@ static void MX_ADC1_Init(void)
   */
 static void MX_USART1_UART_Init(void)
 {
-
-  /* USER CODE BEGIN USART1_Init 0 */
-
-  /* USER CODE END USART1_Init 0 */
-
-  /* USER CODE BEGIN USART1_Init 1 */
-
-  /* USER CODE END USART1_Init 1 */
   huart1.Instance = USART1;
   huart1.Init.BaudRate = 115200;
   huart1.Init.WordLength = UART_WORDLENGTH_8B;
@@ -450,10 +549,6 @@ static void MX_USART1_UART_Init(void)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN USART1_Init 2 */
-
-  /* USER CODE END USART1_Init 2 */
-
 }
 
 /**
@@ -464,8 +559,6 @@ static void MX_USART1_UART_Init(void)
 static void MX_GPIO_Init(void)
 {
   GPIO_InitTypeDef GPIO_InitStruct = {0};
-/* USER CODE BEGIN MX_GPIO_Init_1 */
-/* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOD_CLK_ENABLE();
@@ -612,4 +705,5 @@ void assert_failed(uint8_t *file, uint32_t line)
      ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
   /* USER CODE END 6 */
 }
+
 #endif /* USE_FULL_ASSERT */

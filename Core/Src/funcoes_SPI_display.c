@@ -8,10 +8,15 @@
  Usa:  arquivo "funcoes_SPI_display.h" que contem os #defines e protótipos
        das funções descritas aqui
 /  --------------------------------------------------------------------------*/
-#include <funcoes_SPI_display.h>
 #include "main.h"
+#include <funcoes_SPI_display.h>
 
 #define DIG_APAGA 0x10                 // kte p/ apagar um dígito no display
+
+// liga [0]=f,a,b,g,e,d,c,g; hoz[8]=a,g,d; vrt[9]=b,c,e,f; [10]=dp; [11]=all
+// vetor com vals de 7-seg ligados durante o teste (palavra pronta)
+uint16_t const LedTest7Seg[] = {0xBF00, 0x9F00, 0x9E00, 0x9C00, 0xCC00, 0xC400,
+    0xC000, 0x8000, 0xB600, 0xC900, 0x7F00, 0x0000};
 
 /* ------ FUNCAO que converte um inteiro 8-bits em 7 segmentos --------
 argmento:  valHEX(valor hexadecimal) + kte TIPO_DISPLAY="0" anodo comum
@@ -19,26 +24,26 @@ A ordem dos bits no registrador de deslocamento e':
 dp g f e d c b a 0 0 0 0 0 0 0 0  (fazer OR no retorno p/ ligar 1 dos displays)
 OBS: esta rotina nao liga o DP   (ele deve ser ligado no retorno)
  ----------------------------------------------------------------------------*/
-uint16_t conv_7_seg(int8_t val_char) {
+uint16_t conv_7_seg(int8_t valHEX) {
   uint16_t sseg = 0xFF00;              // inicializa MSByte da palavra com 0xFF
-  switch(val_char)                       // valores default p/ ANODO comum
+  switch(valHEX)                       // valores default p/ ANODO comum
   {
-    case '0': {sseg = 0xC000; break;}  // retorna val p/ 0
-    case '1': {sseg = 0xF900; break;}  // retorna val p/ 1
-    case '2': {sseg = 0xA400; break;}  // retorna val p/ 2
-    case '3': {sseg = 0xB000; break;}  // retorna val p/ 3
-    case '4': {sseg = 0x9900; break;}  // retorna val p/ 4
-    case '5': {sseg = 0x9200; break;}  // retorna val p/ 5
-    case '6': {sseg = 0x8200; break;}  // retorna val p/ 6
-    case '7': {sseg = 0xF800; break;}  // retorna val p/ 7
-    case '8': {sseg = 0x8000; break;}  // retorna val p/ 8
-    case '9': {sseg = 0x9000; break;}  // retorna val p/ 9
-//    case "A": {sseg = 0x8800; break;} // retorna val p/ A
-//    case "B": {sseg = 0x8300; break;} // retorna val p/ B
-//    case "C": {sseg = 0xC600; break;} // retorna val p/ C
-//    case "D": {sseg = 0xA100; break;} // retorna val p/ D
-//    case "E": {sseg = 0x8600; break;} // retorna val p/ E
-//    case "F": {sseg = 0x8E00; break;} // retorna val p/ F
+    case 0x0: {sseg = 0xC000; break;}  // retorna val p/ 0
+    case 0x1: {sseg = 0xF900; break;}  // retorna val p/ 1
+    case 0x2: {sseg = 0xA400; break;}  // retorna val p/ 2
+    case 0x3: {sseg = 0xB000; break;}  // retorna val p/ 3
+    case 0x4: {sseg = 0x9900; break;}  // retorna val p/ 4
+    case 0x5: {sseg = 0x9200; break;}  // retorna val p/ 5
+    case 0x6: {sseg = 0x8200; break;}  // retorna val p/ 6
+    case 0x7: {sseg = 0xF800; break;}  // retorna val p/ 7
+    case 0x8: {sseg = 0x8000; break;}  // retorna val p/ 8
+    case 0x9: {sseg = 0x9000; break;}  // retorna val p/ 9
+    case 0xA: {sseg = 0x8800; break;} // retorna val p/ A
+    case 0xB: {sseg = 0x8300; break;} // retorna val p/ B
+    case 0xC: {sseg = 0xC600; break;} // retorna val p/ C
+    case 0xD: {sseg = 0xA100; break;} // retorna val p/ D
+    case 0xE: {sseg = 0x8600; break;} // retorna val p/ E
+    case 0xF: {sseg = 0x8E00; break;} // retorna val p/ F
     case 0x10: {sseg = 0xFF00; break;} // default = tudo desligado
     default: {sseg = 0xBF00; break;} // ERRO retorna "-" (so' g ligado)
   }
@@ -103,7 +108,7 @@ void mostrar_no_display(int8_t D[], uint8_t pto) {
       sttVARRE = DIG_DEZ;              // prox digito = DEZENA
       ser_data = 0x0008;               // display #1 (LSD = 0x0008 no shield)
       val7seg = conv_7_seg(D[0]);      // conv dsp1_hex para 7-seg
-      if (pto & 0x1) val7seg &= 0x7FFF;    // liga o ponto decimal
+      if (pto & 0x1) val7seg &= 0x7FFF;// liga o ponto decimal
       break;
     }
     case DIG_DEZ: {                    // dezena (2o. digito dir <- esq)
@@ -152,4 +157,5 @@ void reset_pinos_emula_SPI (void)
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET);    // SCK=1
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_SET);    // RCK=SS'=1
 }
+
 // --- final deste arquivo ---
